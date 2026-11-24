@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# AshBoy CLI Entry Point & Main Loop
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ashboy/gameboy.sh"
+
+SCALE=1
+FRAMESKIP=4      # draw 1 frame out of every FRAMESKIP+1
+FPS=10           # target frame rate; 0 = uncapped (never sleep)
+HEADLESS=0
+MAX_FRAMES=0     # 0 = run until Q
+ROM_FILE=""
+
+usage() {
+    cat <<'EOF'
+Usage: bash main.sh [options] <rom.gb>
+  --scale <1|2>      Render scale (default: 1)
+  --frameskip <N>    Draw only every (N+1)th frame (default: 4)
+  --fps <N>          Frame-rate cap, 0 = uncapped (default: 10)
+  --headless         No drawing and no key input (benchmarking)
+  --frames <N>       Stop after N frames (default: unlimited)
+  -h, --help         Show this help
+EOF
+    exit 0
+}
+
+while (( $# > 0 )); do
+    case "$1" in
+        --scale)      SCALE="$2"; shift 2 ;;
+        --frameskip)  FRAMESKIP="$2"; shift 2 ;;
+        --fps)        FPS="$2"; shift 2 ;;
+        --sleep)      echo "Note: --sleep is ignored; use --fps N instead." >&2; shift 2 ;;
+        --headless)   HEADLESS=1; shift ;;
+        --frames)     MAX_FRAMES="$2"; shift 2 ;;
+        -h|--help)    usage ;;
+        -*)           echo "Error: unknown option '$1'" >&2; exit 1 ;;
+        *)            ROM_FILE="$1"; shift ;;
+    esac
+done
+
+if [[ -z "$ROM_FILE" || ! -f "$ROM_FILE" ]]; then
+    echo "Error: ROM file not found: '$ROM_FILE'" >&2
+    exit 1
+fi
+
+# Frame pacing (no forks: uses $EPOCHREALTIME)
+NOW_US=0
+NEXT_US=0
+FRAME_US=0
+if (( FPS > 0 )); then
+    (( FRAME_US = 1000000 / FPS ))
+fi
+
+now_us() {
+    (( NOW_US = 10#${EPOCHREALTIME//[^0-9]/} ))
+}
+
+# Sleep only for the time left in this frame's budget.
+# If the emulator is slower than the cap, never sleep and resync the schedule.
+pace_frame() {
+    (( FPS > 0 )) || return 0
+    now_us
+    (( NEXT_US += FRAME_US ))
+    local wait_us=$(( NEXT_US - NOW_US ))
+    if (( wait_us > 0 )); then
+        local wait_s
+        printf -v wait_s '%d.%06d' $(( wait_us / 1000000 )) $(( wait_us % 1000000 ))
+        LC_NUMERIC=C sleep "$wait_s"
+    else
+        (( NEXT_US = NOW_US ))
+    fi
+}
+
+# Terminal setup and cleanup 
+cleanup() {
+    stty echo icanon 2>/dev/null
+    printf '\e[?25h\e[0m\n'
+}
+trap cleanup EXIT INT TERM
+
+if (( ! HEADLESS )); then
+    stty -echo -icanon 2>/dev/null
+    printf '\e[?25l\e[2J'
+fi
+
+gameboy_init
+gameboy_load_rom "$ROM_FILE"
+now_us
+NEXT_US=$NOW_US
+
+# Main loop 
+frame=0
+while (( MAX_FRAMES == 0 || frame < MAX_FRAMES )); do
+    joypad_begin_frame
+    if (( ! HEADLESS )); then
+        joypad_poll_terminal
+    fi
+    if (( JOYPAD_QUIT )); then
+        break
+    fi
+
+    # Decide once per frame whether this frame is drawn
+    if (( HEADLESS || frame % (FRAMESKIP + 1) != 0 )); then
+        RENDER_THIS_FRAME=0
+    else
+        RENDER_THIS_FRAME=1
+    fi
+
+    gameboy_step_frame
+
+    if (( RENDER_THIS_FRAME && ! HEADLESS )); then
+        ppu_present_ansi "$SCALE"
+    fi
+
+    pace_frame
+    (( frame++ ))
+done
+(( HEADLESS )) && printf 'frames=%d steps=%d\n' "$frame" "$GB_STEPS" >&2
