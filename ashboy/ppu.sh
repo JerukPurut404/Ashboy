@@ -91,6 +91,22 @@ ppu_set_mode() {
     fi
 }
 
+# Cache of background pixel rows, keyed by the two tile bytes (lo<<8 | hi).
+# Each value is 8 characters, one colour index (0-3) per pixel, left to right.
+# A row depends only on its two bytes, so entries never go stale.
+declare -gA PPU_ROW_CACHE=()
+declare -ga _PPU_SHADE=(0 0 0 0)
+
+ppu_build_row_cache() {
+    local lo=$1 hi=$2 key=$3 p bit s=""
+    for (( p = 0; p < 8; p++ )); do
+        bit=$(( 7 - p ))
+        s+=$(( ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1) ))
+    done
+    PPU_ROW_CACHE[$key]=$s
+}
+
+
 ppu_render_scanline() {
     # All locals are declared once here. 'local' inside loops costs a builtin
     # call per iteration.
@@ -102,6 +118,8 @@ ppu_render_scanline() {
     local map_base tile_row tile_col fine_y wx_rel color_idx
     local sprite_height sprites_on_line i sy sx tile attr
     local line t_addr pal bg_prio out_x c_idx
+    local key row px0 px1
+
 
     # LCD off: blank the line to colour 0
     if (( (PPU_LCDC & 0x80) == 0 )); then
@@ -111,11 +129,13 @@ ppu_render_scanline() {
         return
     fi
 
+
     unsigned_tiles=$(( (PPU_LCDC & 0x10) ? 1 : 0 ))
     bg_map=$(( (PPU_LCDC & 0x08) ? 0x1C00 : 0x1800 ))
     win_map=$(( (PPU_LCDC & 0x40) ? 0x1C00 : 0x1800 ))
     win_enabled=$(( ((PPU_LCDC & 0x20) && ly >= PPU_WY && PPU_WX <= 166) ? 1 : 0 ))
     win_used=0
+
 
     # Colour index -> shade, computed once per line instead of per pixel
     _PPU_SHADE[0]=$(( PPU_BGP & 3 ))
@@ -123,9 +143,11 @@ ppu_render_scanline() {
     _PPU_SHADE[2]=$(( (PPU_BGP >> 4) & 3 ))
     _PPU_SHADE[3]=$(( (PPU_BGP >> 6) & 3 ))
 
+
     y_bg=$(( (ly + PPU_SCY) & 0xFF ))
     tile_row_bg=$(( (y_bg >> 3) * 32 ))
     fine_y_bg=$(( (y_bg & 7) * 2 ))
+
 
     # 1. Background & Window
     if (( (PPU_LCDC & 0x01) == 0 )); then
@@ -172,6 +194,7 @@ ppu_render_scanline() {
     else
         # Background line: one fetch per 8-pixel tile.
         # Tile column tc covers pixels x = tc*8 + px - fx, where fx = SCX & 7.
+        # Only the pixels with 0 <= x < 160 are drawn, so no per-pixel range check.
         fx=$(( PPU_SCX & 7 ))
         tcol0=$(( PPU_SCX >> 3 ))
         for (( tc = 0; tc < 21; tc++ )); do
@@ -185,16 +208,27 @@ ppu_render_scanline() {
             fi
             lo=${PPU_VRAM[tile_addr + fine_y_bg]:-0}
             hi=${PPU_VRAM[tile_addr + fine_y_bg + 1]:-0}
-            for (( px = 0; px < 8; px++ )); do
+
+            # Decode this tile row once per distinct pair of bytes
+            key=$(( (lo << 8) | hi ))
+            if [[ -z ${PPU_ROW_CACHE[$key]+x} ]]; then
+                ppu_build_row_cache "$lo" "$hi" "$key"
+            fi
+            row=${PPU_ROW_CACHE[$key]}
+
+            # Pixel range of this tile that falls on screen
+            px0=$(( fx - tc * 8 ));        (( px0 < 0 )) && px0=0
+            px1=$(( 160 + fx - tc * 8 ));  (( px1 > 8 )) && px1=8
+
+            for (( px = px0; px < px1; px++ )); do
                 x=$(( tc * 8 + px - fx ))
-                (( x < 0 || x >= 160 )) && continue
-                bit=$(( 7 - px ))
-                c=$(( ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1) ))
+                c=${row:px:1}
                 PPU_BG_COLOR_IDX[x]=$c
                 PPU_FRAMEBUFFER[row_offset + x]=${_PPU_SHADE[c]}
             done
         done
     fi
+
 
     # 2. Sprites (unchanged logic)
     if (( PPU_LCDC & 0x02 )); then

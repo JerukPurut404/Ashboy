@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # ashboy/gameboy.sh: System coordinator: instruction, scanline and frame stepping
 
+
 [[ -n "${_ASHBOY_GAMEBOY_SH:-}" ]] && return 0
 readonly _ASHBOY_GAMEBOY_SH=1
+
 
 _GB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_GB_DIR/init.sh"
@@ -13,31 +15,28 @@ source "$_GB_DIR/ppu.sh"
 source "$_GB_DIR/mmu.sh"
 source "$_GB_DIR/interrupts.sh"
 source "$_GB_DIR/cpu.sh"
+source "$_GB_DIR/loopskip.sh"
+
 
 # Set by main.sh before each frame: 1 = draw scanlines, 0 = skip drawing
 RENDER_THIS_FRAME=1
 declare -gi PPU_FRAME_COUNT=${PPU_FRAME_COUNT:-0}
 declare -gi GB_STEPS=0
 
-# Idle-loop skip 
-# Game spends most of each frame in this poll loop (about 2,400 passes per
-# frame, roughly 88% of instructions):
-#     0x02ED  F0 nn   LDH A,(0xFF00+nn)     nn >= 0x80 (HRAM)
-#     0x02EF  A7      AND A
-#     0x02F0  28 FB   JR Z,-5               back to 0x02ED while A == 0
-# The loop reads HRAM and writes only A and F, and it never changes IF. While
-# the HRAM byte stays zero, whole passes end in the same state, so they can be
-# taken in one jump. The result matches stepping exactly, as long as the jump
-# never crosses a scanline end, a TIMA overflow, or a pending interrupt.
 
-declare -gi GB_SKIP=${GB_SKIP:-1}   # GB_SKIP=0 turns the skip off, for comparison
-declare -gi GB_SKIP_CYC=28          # cycles per pass; set to the value from probe_cycles.s
+# Loop skipping: ashboy/loopskip.sh advances tight loops in one call, when
+# that gives exactly the state that stepping would give. GB_STEPS counts
+# each skipped pass as 3 steps, so real instructions = GB_STEPS - 3 * passes.
+# GB_SKIP=0 turns the skip off, for comparison.
+declare -gi GB_SKIP=${GB_SKIP:-1}
 declare -gi GB_SKIP_PASSES=0
+
 
 # Scratch globals
 _GB_LY=0
 _GB_CYC=0
 _GB_LINE=0
+
 
 gameboy_init() {
     cpu_init
@@ -47,8 +46,12 @@ gameboy_init() {
     ppu_init
 }
 
+
 gameboy_load_rom() {
     cartridge_load "$1"
+    local rc=$?
+    loopskip_build_filter          # one-time table build, about 0.1-0.3 s
+    return $rc
 }
 
 # Execute one unit of work and advance the timer by its cycle count.
@@ -58,15 +61,16 @@ gameboy_step() {
     # One arithmetic test decides whether interrupts_service is needed.
     # Most steps have nothing pending, so the function call is skipped.
     if (( (MMU_IE & MMU_IF & 0x1F) != 0 )) && interrupts_service; then
-        :                               # dispatched: _CPU_CYCLES is 20
+        :                           # dispatched: _CPU_CYCLES is 20
     elif (( CPU_HALTED )); then
-        _CPU_CYCLES=4                   # idle until an interrupt arrives
+        _CPU_CYCLES=4               # idle until an interrupt arrives
     else
         cpu_step
     fi
     (( _CPU_CYCLES > 0 )) || (( _CPU_CYCLES = 4 ))
     timer_tick "$_CPU_CYCLES"
 }
+
 
 # Run one scanline (456 T-cycles)
 gameboy_step_scanline() {
@@ -82,8 +86,11 @@ gameboy_step_scanline() {
             break
         fi
 
-        if (( GB_SKIP && CPU_PC == 0x02ED )) && gameboy_try_skip; then
-            :  # _CPU_CYCLES holds the full batch
+        # Loop skip. The inline test runs first: it calls loopskip_try only
+        # at addresses where a loop could start (bank 0) or in high RAM.
+        if (( GB_SKIP && ( CPU_PC < 0x4000 ? LS_CAND[CPU_PC] : (CPU_PC >= 0xFF80) ) )) &&
+           loopskip_try $(( 456 - _GB_CYC )); then
+            :
         else
             gameboy_step
         fi
@@ -102,33 +109,11 @@ gameboy_step_scanline() {
     MMU_IO[68]=$PPU_LY                  # 0xFF44 = LY
 }
 
+
 # Run one full frame (154 scanlines = 70,224 T-cycles)
 gameboy_step_frame() {
     for (( _GB_LINE = 0; _GB_LINE < 154; _GB_LINE++ )); do
         gameboy_step_scanline
     done
     (( PPU_FRAME_COUNT++ ))
-}
-
-gameboy_try_skip() {
-    (( CPU_PC == 0x02ED && !CPU_HALTED && !CPU_HALT_BUG &&
-       !CPU_IME_DELAY && !(MMU_IE & MMU_IF & 0x1F) &&
-       !(TIMER_TAC & 4) )) || return 1
-
-    # F0 85: LDH A,(FF85); A7: AND A; 28 FB: JR Z,02ED.
-    (( ${MMU_HRAM[5]:-0} == 0 &&
-       ${CART_ROM[0x02ED]:-0} == 0xF0 &&
-       ${CART_ROM[0x02EE]:-0} == 0x85 &&
-       ${CART_ROM[0x02EF]:-0} == 0xA7 &&
-       ${CART_ROM[0x02F0]:-0} == 0x28 &&
-       ${CART_ROM[0x02F1]:-0} == 0xFB )) || return 1
-
-    # Take only complete passes that fit before the next scanline boundary.
-    local n=$(( (456 - _GB_CYC) / 28 ))
-    (( n > 0 )) || return 1
-
-    (( CPU_A = 0, CPU_F = 0xA0, _CPU_CYCLES = 28 * n,
-       GB_STEPS += 3 * n, GB_SKIP_PASSES += n ))
-    timer_tick "$_CPU_CYCLES"
-    return 0
 }

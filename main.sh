@@ -104,13 +104,15 @@ hud_tick() {
         HUD_T0=$NOW_US; HUD_F0=$HUD_FRAMES; HUD_D0=$HUD_DRAWN
     fi
     local dt=$(( NOW_US - HUD_T0 ))
-    if (( dt >= 1000000 )); then
+    if (( dt >= 2000000 )); then
+        # Emulated fps in whole frames per second; drawn rate in tenths
         (( HUD_EMU_FPS  = (HUD_FRAMES - HUD_F0) * 1000000 / dt ))
-        (( HUD_DRAW_FPS = (HUD_DRAWN - HUD_D0) * 1000000 / dt ))
+        (( HUD_DRAW_FPS = (HUD_DRAWN - HUD_D0) * 10000000 / dt ))
         HUD_T0=$NOW_US; HUD_F0=$HUD_FRAMES; HUD_D0=$HUD_DRAWN
     fi
-    printf -v HUD_TEXT 'frame %d | %d fps (%d%% of real time) | drawn %d/s | Q=quit' \
-        "$HUD_FRAMES" "$HUD_EMU_FPS" $(( HUD_EMU_FPS * 100 / 60 )) "$HUD_DRAW_FPS"
+    printf -v HUD_TEXT 'frame %d | %d fps (%d%% of real time) | drawn %d.%d/s | Q=quit' \
+        "$HUD_FRAMES" "$HUD_EMU_FPS" $(( HUD_EMU_FPS * 100 / 60 )) \
+        $(( HUD_DRAW_FPS / 10 )) $(( HUD_DRAW_FPS % 10 ))
 }
 
 # Main loop 
