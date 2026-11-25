@@ -25,7 +25,7 @@ state() {
         printf "io IE=%s IF=%s LY=%s steps=%s\n" "$MMU_IE" "$MMU_IF" "$PPU_LY" "$GB_STEPS"
         printf "mem %s\n"  "$(printf "%s|%s|%s" "${MMU_WRAM[*]}" "${MMU_HRAM[*]}" "${MMU_IO[*]}" | md5sum)"
         printf "vram %s\n" "$(printf "%s|%s" "${PPU_VRAM[*]}" "${PPU_OAM[*]}" | md5sum)"
-        printf "fb %s\n"   "$(printf "%s" "${PPU_FRAMEBUFFER[*]}" | md5sum)"
+        printf "fb %s\n"   "$(ppu_fb_flat; printf "%s" "$PPU_FLAT" | md5sum)"
         printf "passes %s\n" "$GB_SKIP_PASSES"
     '
 }
