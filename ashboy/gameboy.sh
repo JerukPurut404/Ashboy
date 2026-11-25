@@ -19,6 +19,21 @@ RENDER_THIS_FRAME=1
 declare -gi PPU_FRAME_COUNT=${PPU_FRAME_COUNT:-0}
 declare -gi GB_STEPS=0
 
+# Idle-loop skip 
+# Game spends most of each frame in this poll loop (about 2,400 passes per
+# frame, roughly 88% of instructions):
+#     0x02ED  F0 nn   LDH A,(0xFF00+nn)     nn >= 0x80 (HRAM)
+#     0x02EF  A7      AND A
+#     0x02F0  28 FB   JR Z,-5               back to 0x02ED while A == 0
+# The loop reads HRAM and writes only A and F, and it never changes IF. While
+# the HRAM byte stays zero, whole passes end in the same state, so they can be
+# taken in one jump. The result matches stepping exactly, as long as the jump
+# never crosses a scanline end, a TIMA overflow, or a pending interrupt.
+
+declare -gi GB_SKIP=${GB_SKIP:-1}   # GB_SKIP=0 turns the skip off, for comparison
+declare -gi GB_SKIP_CYC=28          # cycles per pass; set to the value from probe_cycles.s
+declare -gi GB_SKIP_PASSES=0
+
 # Scratch globals
 _GB_LY=0
 _GB_CYC=0
@@ -67,7 +82,11 @@ gameboy_step_scanline() {
             break
         fi
 
-        gameboy_step
+        if (( GB_SKIP && CPU_PC == 0x02ED )) && gameboy_try_skip; then
+            :  # _CPU_CYCLES holds the full batch
+        else
+            gameboy_step
+        fi
         (( _GB_CYC += _CPU_CYCLES ))
     done
 
@@ -89,4 +108,27 @@ gameboy_step_frame() {
         gameboy_step_scanline
     done
     (( PPU_FRAME_COUNT++ ))
+}
+
+gameboy_try_skip() {
+    (( CPU_PC == 0x02ED && !CPU_HALTED && !CPU_HALT_BUG &&
+       !CPU_IME_DELAY && !(MMU_IE & MMU_IF & 0x1F) &&
+       !(TIMER_TAC & 4) )) || return 1
+
+    # F0 85: LDH A,(FF85); A7: AND A; 28 FB: JR Z,02ED.
+    (( ${MMU_HRAM[5]:-0} == 0 &&
+       ${CART_ROM[0x02ED]:-0} == 0xF0 &&
+       ${CART_ROM[0x02EE]:-0} == 0x85 &&
+       ${CART_ROM[0x02EF]:-0} == 0xA7 &&
+       ${CART_ROM[0x02F0]:-0} == 0x28 &&
+       ${CART_ROM[0x02F1]:-0} == 0xFB )) || return 1
+
+    # Take only complete passes that fit before the next scanline boundary.
+    local n=$(( (456 - _GB_CYC) / 28 ))
+    (( n > 0 )) || return 1
+
+    (( CPU_A = 0, CPU_F = 0xA0, _CPU_CYCLES = 28 * n,
+       GB_STEPS += 3 * n, GB_SKIP_PASSES += n ))
+    timer_tick "$_CPU_CYCLES"
+    return 0
 }

@@ -92,19 +92,18 @@ ppu_set_mode() {
 }
 
 ppu_render_scanline() {
-    # All variables are declared once here. 'local' inside the per-pixel and
-    # per-sprite loops cost a builtin call each time. Logic is unchanged.
+    # All locals are declared once here. 'local' inside loops costs a builtin
+    # call per iteration.
     local ly=$PPU_LY
     local row_offset=$(( ly * 160 ))
-    local x
+    local x p px tc tcol bit c lo hi tile_num tile_addr signed_num
     local unsigned_tiles bg_map win_map win_enabled win_used
-    local y_bg tile_row_bg fine_y_bg
-    local map_base tile_row tile_col fine_y bit wx_rel
-    local tile_num tile_addr signed_num lo hi color_idx
+    local y_bg tile_row_bg fine_y_bg fx tcol0
+    local map_base tile_row tile_col fine_y wx_rel color_idx
     local sprite_height sprites_on_line i sy sx tile attr
-    local line t_addr pal bg_prio px out_x c_idx
+    local line t_addr pal bg_prio out_x c_idx
 
-    # LCD off: blank the line to color 0
+    # LCD off: blank the line to colour 0
     if (( (PPU_LCDC & 0x80) == 0 )); then
         for (( x = 0; x < 160; x++ )); do
             PPU_FRAMEBUFFER[row_offset + x]=0
@@ -118,12 +117,26 @@ ppu_render_scanline() {
     win_enabled=$(( ((PPU_LCDC & 0x20) && ly >= PPU_WY && PPU_WX <= 166) ? 1 : 0 ))
     win_used=0
 
-    # 1. Background & Window
-    if (( PPU_LCDC & 0x01 )); then
-        y_bg=$(( (ly + PPU_SCY) & 0xFF ))
-        tile_row_bg=$(( (y_bg >> 3) * 32 ))
-        fine_y_bg=$(( (y_bg & 7) * 2 ))
+    # Colour index -> shade, computed once per line instead of per pixel
+    _PPU_SHADE[0]=$(( PPU_BGP & 3 ))
+    _PPU_SHADE[1]=$(( (PPU_BGP >> 2) & 3 ))
+    _PPU_SHADE[2]=$(( (PPU_BGP >> 4) & 3 ))
+    _PPU_SHADE[3]=$(( (PPU_BGP >> 6) & 3 ))
 
+    y_bg=$(( (ly + PPU_SCY) & 0xFF ))
+    tile_row_bg=$(( (y_bg >> 3) * 32 ))
+    fine_y_bg=$(( (y_bg & 7) * 2 ))
+
+    # 1. Background & Window
+    if (( (PPU_LCDC & 0x01) == 0 )); then
+        # Background disabled: every pixel is colour 0
+        for (( x = 0; x < 160; x++ )); do
+            PPU_BG_COLOR_IDX[x]=0
+            PPU_FRAMEBUFFER[row_offset + x]=${_PPU_SHADE[0]}
+        done
+
+    elif (( win_enabled )); then
+        # Window line: per-pixel path, because the window can start mid-line
         for (( x = 0; x < 160; x++ )); do
             map_base=$bg_map
             tile_row=$tile_row_bg
@@ -131,7 +144,7 @@ ppu_render_scanline() {
             fine_y=$fine_y_bg
             bit=$(( 7 - ((x + PPU_SCX) & 7) ))
 
-            if (( win_enabled && x >= (PPU_WX - 7) )); then
+            if (( x >= (PPU_WX - 7) )); then
                 win_used=1
                 wx_rel=$(( x - (PPU_WX - 7) ))
                 map_base=$win_map
@@ -146,24 +159,44 @@ ppu_render_scanline() {
                 tile_addr=$(( tile_num * 16 ))
             else
                 signed_num=$(( (tile_num & 0x80) ? (tile_num - 256) : tile_num ))
-                tile_addr=$(( 0x1000 + (signed_num * 16) ))
+                tile_addr=$(( 0x1000 + signed_num * 16 ))
             fi
-
             lo=${PPU_VRAM[tile_addr + fine_y]:-0}
             hi=${PPU_VRAM[tile_addr + fine_y + 1]:-0}
             color_idx=$(( ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1) ))
             PPU_BG_COLOR_IDX[x]=$color_idx
-            PPU_FRAMEBUFFER[row_offset + x]=$(( (PPU_BGP >> (color_idx * 2)) & 0x03 ))
+            PPU_FRAMEBUFFER[row_offset + x]=${_PPU_SHADE[color_idx]}
         done
         (( win_used )) && (( PPU_WIN_LINE++ ))
+
     else
-        for (( x = 0; x < 160; x++ )); do
-            PPU_BG_COLOR_IDX[x]=0
-            PPU_FRAMEBUFFER[row_offset + x]=$(( PPU_BGP & 0x03 ))
+        # Background line: one fetch per 8-pixel tile.
+        # Tile column tc covers pixels x = tc*8 + px - fx, where fx = SCX & 7.
+        fx=$(( PPU_SCX & 7 ))
+        tcol0=$(( PPU_SCX >> 3 ))
+        for (( tc = 0; tc < 21; tc++ )); do
+            tcol=$(( (tcol0 + tc) & 31 ))
+            tile_num=${PPU_VRAM[bg_map + tile_row_bg + tcol]:-0}
+            if (( unsigned_tiles )); then
+                tile_addr=$(( tile_num * 16 ))
+            else
+                signed_num=$(( (tile_num & 0x80) ? (tile_num - 256) : tile_num ))
+                tile_addr=$(( 0x1000 + signed_num * 16 ))
+            fi
+            lo=${PPU_VRAM[tile_addr + fine_y_bg]:-0}
+            hi=${PPU_VRAM[tile_addr + fine_y_bg + 1]:-0}
+            for (( px = 0; px < 8; px++ )); do
+                x=$(( tc * 8 + px - fx ))
+                (( x < 0 || x >= 160 )) && continue
+                bit=$(( 7 - px ))
+                c=$(( ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1) ))
+                PPU_BG_COLOR_IDX[x]=$c
+                PPU_FRAMEBUFFER[row_offset + x]=${_PPU_SHADE[c]}
+            done
         done
     fi
 
-    # 2. Sprites
+    # 2. Sprites (unchanged logic)
     if (( PPU_LCDC & 0x02 )); then
         sprite_height=$(( (PPU_LCDC & 0x04) ? 16 : 8 ))
         sprites_on_line=0
@@ -277,6 +310,6 @@ ppu_present_ansi() {
         done
         out+=$'\e[0m\n'
     done
-    out+=" [AshBoy] ${CART_TITLE:-ROM} | Arrows/WASD=D-Pad  Z=A  X=B  Enter=Start  Space=Select  Q=Quit"$'\e[K'
+    out+=" [AshBoy] ${CART_TITLE:-ROM} | ${HUD_TEXT:-}"$'\e[K'
     printf '%s' "$out"
 }

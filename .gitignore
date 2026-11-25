@@ -1,0 +1,10 @@
+ROMs/
+# ROMs and save/dump files (copyrighted or user data)
+*.gb
+*.gbc
+*.sav
+*.pgm
+
+# Local diagnostics and old documentation
+probe*.sh
+README.old.md

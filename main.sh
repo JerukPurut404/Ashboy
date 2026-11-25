@@ -90,6 +90,29 @@ gameboy_load_rom "$ROM_FILE"
 now_us
 NEXT_US=$NOW_US
 
+declare -g  HUD_TEXT=""
+declare -gi HUD_FRAMES=0 HUD_DRAWN=0 HUD_T0=0 HUD_F0=0 HUD_D0=0
+declare -gi HUD_EMU_FPS=0 HUD_DRAW_FPS=0
+
+hud_tick() {
+    (( HUD_FRAMES++ ))
+    if (( RENDER_THIS_FRAME && ! HEADLESS )); then
+        (( HUD_DRAWN++ ))
+    fi
+    now_us
+    if (( HUD_T0 == 0 )); then
+        HUD_T0=$NOW_US; HUD_F0=$HUD_FRAMES; HUD_D0=$HUD_DRAWN
+    fi
+    local dt=$(( NOW_US - HUD_T0 ))
+    if (( dt >= 1000000 )); then
+        (( HUD_EMU_FPS  = (HUD_FRAMES - HUD_F0) * 1000000 / dt ))
+        (( HUD_DRAW_FPS = (HUD_DRAWN - HUD_D0) * 1000000 / dt ))
+        HUD_T0=$NOW_US; HUD_F0=$HUD_FRAMES; HUD_D0=$HUD_DRAWN
+    fi
+    printf -v HUD_TEXT 'frame %d | %d fps (%d%% of real time) | drawn %d/s | Q=quit' \
+        "$HUD_FRAMES" "$HUD_EMU_FPS" $(( HUD_EMU_FPS * 100 / 60 )) "$HUD_DRAW_FPS"
+}
+
 # Main loop 
 frame=0
 while (( MAX_FRAMES == 0 || frame < MAX_FRAMES )); do
@@ -109,6 +132,7 @@ while (( MAX_FRAMES == 0 || frame < MAX_FRAMES )); do
     fi
 
     gameboy_step_frame
+    hud_tick
 
     if (( RENDER_THIS_FRAME && ! HEADLESS )); then
         ppu_present_ansi "$SCALE"

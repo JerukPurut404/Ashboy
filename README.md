@@ -1,6 +1,7 @@
 # AshBoy
 
-A experimental Game Boy (DMG) emulator written in pure Bash. 
+A experimental Game Boy (DMG) emulator written in pure Bash. The picture is drawn in the terminal with half-block characters and ANSI colors.
+Pure Bash is slow. AshBoy runs well below real time. See [Performance](#performance).
 
 > **Status: experimental.** The CPU, timer, PPU, joypad, serial port, and interrupts run well enough for commercial games to boot and reach their title or menu screens. The main limit is speed: the emulator runs about 24 times slower than a real Game Boy. There is no audio yet. Keyboard play through a menu has not been confirmed end to end.
 
@@ -25,6 +26,23 @@ A experimental Game Boy (DMG) emulator written in pure Bash.
 15. [Next steps](#next-steps)
 
 ---
+
+## Project progress
+
+Percentages are rough estimates. The two speed rows are measured.
+
+```
+CPU instructions (incl. CB prefix)  ███████████████████░  95%
+Interrupts and timer                ██████████████████░░  90%
+Keyboard input (joypad)             ██████████████████░░  90%
+PPU: background, window, sprites    █████████████████░░░  85%
+Terminal display                    █████████████████░░░  85%
+Memory bus and cartridge            ████████████████░░░░  80%
+Serial port                         ████████████████░░░░  80%
+Sound (APU)                         ░░░░░░░░░░░░░░░░░░░░   0%
+Speed, headless (18 of 60 FPS)      ██████░░░░░░░░░░░░░░  30%
+Speed, playable (3 of 60 FPS)       █░░░░░░░░░░░░░░░░░░░   5%
+```
 
 ## Requirements
 
@@ -83,6 +101,20 @@ Unknown options print an error and exit.
 
 **Note on `--fps`:** at the current speed (about 2.5 FPS), the cap never engages, so the emulator runs flat out. The cap matters only once the emulator is fast enough to exceed it.
 
+## The status line
+
+The bottom line shows the cartridge title and live statistics:
+
+```
+[AshBoy] TITLE | frame N | X fps (Y% of real time) | drawn Z/s | Q=quit
+```
+
+- **frame N:** emulated frames since start.
+- **X fps:** emulated frames per second over the last interval.
+- **Y% of real time:** X divided by 60. Real Game Boy speed is about 59.7 frames per second.
+- **drawn Z/s:** frames written to the terminal per second.
+
+
 ## Project layout
 
 ```
@@ -123,6 +155,16 @@ main.sh
  ├─ ppu_present_ansi "$SCALE"                   only on drawn frames
  └─ pace_frame                                  sleep for the rest of the frame budget
 ```
+
+**Timing.** The Game Boy clock runs at 4,194,304 cycles per second. A frame is 154 scanlines of 456 cycles each, or 70,224 cycles. Scanlines 0 to 143 are visible. Scanline 144 starts V-Blank and sets the V-Blank interrupt flag.
+
+**Stepping.** `gameboy_step_scanline` runs CPU instructions until 456 cycles have passed. The timer advances with every instruction. At the end of each line, the PPU renders the line into a 160 × 144 framebuffer of shade indexes.
+
+**Output.** `ppu_present_ansi` combines pairs of framebuffer rows into half-block characters and prints the whole frame with one `printf` call. The frame is redrawn in place with `ESC[H`, so the terminal is never cleared.
+
+**CPU dispatch.** A 256-entry table, `OP_FN`, maps each opcode to a handler function. Opcodes with the `CB` prefix go through `op_cb`.
+
+**Idle-loop skip.** Game-independent note: the skip applies to one busy-wait loop in one ROM, at address `0x02ED`. It waits for a flag that the V-Blank handler sets. When the loop is detected, the emulator advances time in one jump instead of running each pass. It runs only when the ROM bytes at the loop match exactly and all of these hold: no interrupt is pending, the timer is disabled, no EI delay is active, and the HALT bug is not active. With `GB_SKIP=0`, the CPU, memory, and framebuffer state are identical. This was checked over 60 and 600 frames. Other ROMs are not affected; they run at normal speed.
 
 **Data flow.** Modules communicate through global variables. Functions that return a value write it to `REPLY`, or to a named global such as `_RR` or `_ROT_RES`. Hardware state is held in globals with names like `CPU_A`, `PPU_LY`, and `MMU_IF`.
 
@@ -274,28 +316,24 @@ These rules come from bugs found during development. Follow them when changing t
 
 ## Known limitations
 
-- **Speed.** About 2.5 FPS headless and about 1 FPS with the display on. Real time is 59.7 FPS. Pure Bash is unlikely to reach real time.
-- **No sound.**
-- **DMG only.** Game Boy Color games will not run.
-- **Mappers.** Only ROM-only, MBC1, and MBC3 cartridges are covered. Other mappers are untested.
-- **Tested with one game.** Other ROMs may expose bugs.
-- **Input timing.** Key presses last one emulated frame. The terminal sends no key-release events, so holding a key relies on key-repeat. A short tap can be missed when the emulator is slow.
-- **Keyboard play not confirmed.** The P1 path and the emulated Start press work. Pressing keys in the real terminal through the menu has not been verified.
+- **No sound.** The audio hardware is not emulated at all. Implementing it would need real-time timing, which the emulator does not reach yet.
+- **Original Game Boy (DMG) only.** Game Boy Color games will not run; the console mode and its extra hardware are not supported.
+- **Limited mappers.** Only ROM-only, MBC1, and MBC3 cartridges are covered. ROMs using other mappers are untested and will likely fail to load or misbehave.
+- **Speed.** Performance is far below real time: a few FPS headless and slower still with the display on, against the real console's 59.7 FPS. Pure Bash is unlikely to ever reach real time.
+- **Idle-loop skip is ROM-specific.** The skip applies to one polling loop at one address, tuned for the tested game. Other ROMs run without it and pay the full cost of the idle loop.
 - **STAT interrupt.** The vector exists, but the conditions that raise it are not fully verified.
-- **Terminal picture.** Half-block rendering means the picture is 160 by 72 characters. Drawing a frame adds about 0.55 s.
+- **Tested with few ROMs.** Behaviour beyond the handful of tested games is unknown; other titles may expose bugs the emulator does not handle yet.
 
 ## Next steps
 
-Ordered by priority. Update this list as items finish.
-
-1. **Confirm keyboard play through the menu.** Run `nice -n 19 bash main.sh --scale 1 --frameskip 2 --fps 0 "<rom>.gb"`. Check that Enter reaches the menu, the arrow keys move the cursor, and Z selects a game type. This is the next open check, and it decides whether input needs work.
-2. **Speed up the terminal picture.** Paste `ppu_present_ansi` and measure how much of the drawn-frame cost it causes. Fewer escape sequences and a single `printf` per frame are the goals.
-3. **Reorder the memory bus.** Move the WRAM and HRAM checks to the top of `mmu_read8` and `mmu_write8`. Confirm `steps=163821` and the framebuffer hash are unchanged, then measure.
-4. **Skip the idle wait loop.** About 88% of instructions in a commercial game are one V-Blank poll loop, so this is the largest available gain. The skip must be exact: it advances the timer, LY, and frame count by the same amounts as the real instructions, and it must never run when an interrupt is pending. Verify with the framebuffer hash and the `probe7` trace (hash changes at frames 550 and 650).
-5. **Add regression tests.** Turn the P1 test, the framebuffer hash, and "reaches the menu after N frames" into automated tests, so future edits are caught.
-6. **Decide the speed ceiling.** Either accept a few FPS (good for watching and testing), or rewrite only the core (CPU, PPU, and bus) in a compiled language and keep Bash for the UI. The second option breaks the pure-Bash requirement, so this decision belongs to the project owner.
-7. **Remove the `--sleep` stub** once nothing depends on it.
-8. **Sound.** Not planned. It needs real-time timing, which depends on item 7.
+1. **Speed up `ppu_render_scanline`.** It is the single largest cost in a drawn frame, about 0.36 s. Optimising it is the biggest lever on overall framerate.
+2. **Measure `ppu_present_ansi 2`.** Count and reduce the characters written per frame at scale 2 — fewer escape sequences and ideally a single `printf` per frame.
+3. **Generalize the idle-loop skip.** Either detect the pattern automatically or document how to add a skip entry for another ROM, so the technique is not limited to one hardcoded address.
+4. **Check WRAM and HRAM first in the memory bus.** Move these high-frequency checks to the top of `mmu_read8` and `mmu_write8`, confirm `steps=163821` and the framebuffer hash stay unchanged, then measure the gain.
+5. **Add a skip regression test.** Write an automated test that takes the ROM path as an argument, so the idle-loop skip stays verified as the code evolves.
+6. **Remove the `--sleep` stub** once nothing depends on it.
+7. **Decide the speed ceiling.** Staying in pure Bash is the current choice; the alternative is rewriting the CPU, PPU, and bus in a compiled language and keeping Bash for the UI. That breaks the pure-Bash requirement, so the decision belongs to the project owner.
+8. **Sound.** Not planned. It depends on real-time timing, which in turn depends on how item 7 is resolved.
 
 ## Credits
 
