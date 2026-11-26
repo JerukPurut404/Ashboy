@@ -96,7 +96,6 @@ bash main.sh [options] ROM_FILE
 | `--fps N` | `10` | Frame-rate cap. `0` means uncapped, and the emulator never sleeps. |
 | `--headless` | off | No drawing and no keyboard input. On exit, prints `frames=N steps=N` to stderr. Used for benchmarks. |
 | `--frames N` | `0` | Stop after N frames. `0` means run until Q. |
-| `--serial` | off | Print characters sent through the serial port. Check `bash main.sh --help` to confirm this flag is in your version. |
 | `--sleep N` | n/a | Ignored. Prints a note. Replaced by `--fps`. |
 | `-h`, `--help` | | Show help. |
 
