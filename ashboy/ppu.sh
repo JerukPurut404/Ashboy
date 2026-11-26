@@ -13,6 +13,15 @@ readonly _ASHBOY_PPU_SH=1
 _PPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_PPU_DIR/init.sh"
 
+
+# Segment cache. A stored result is reused only while no VRAM byte has changed
+# (PPU_VRAM_GEN). Its key holds every other input: the arguments and PPU_BGP.
+# GB_SEG_CACHE=0 turns the cache off, so a run with and without it can be compared.
+declare -gi PPU_VRAM_GEN=${PPU_VRAM_GEN:-0}
+declare -gi SEG_CACHE_GEN=-1
+declare -gi GB_SEG_CACHE=${GB_SEG_CACHE:-1}
+declare -gA SEG_SHADE_CACHE=() SEG_COL_CACHE=()
+
 declare -ga PPU_VRAM=()
 declare -ga PPU_OAM=()
 declare -ga PPU_FRAMEBUFFER=()     # 144 rows of 160 shade digits
@@ -70,6 +79,7 @@ declare -ga DMG_LUT=(
 ppu_init() {
     local i
     for (( i = 0; i < 8192; i++ )); do PPU_VRAM[i]=0; done
+    (( PPU_VRAM_GEN++ ))
     for (( i = 0; i < 160; i++ )); do PPU_OAM[i]=0; done
     printf -v PPU_ZERO_ROW '%160s' ''
     PPU_ZERO_ROW=${PPU_ZERO_ROW// /0}
@@ -127,9 +137,29 @@ ppu_build_tile_row() {
 #   ntiles      number of tiles
 #   use_unsigned 1 for unsigned tile numbers (0x8000 mode), 0 for signed
 # Results: _PPU_SEG_SHADE and _PPU_SEG_COL, ntiles*8 characters each.
+# Splits one segment of ntiles tiles into shade and colour strings.
+# Arguments: map_base, row_off, first_col, fine, ntiles, use_unsigned.
+# Results: _PPU_SEG_SHADE and _PPU_SEG_COL, ntiles*8 characters each.
 ppu_fetch_segment() {
     local map_base=$1 row_off=$2 first_col=$3 fine=$4 ntiles=$5 use_unsigned=$6
-    local tc tile_num tile_addr signed_num lo hi key skey
+    local tc tile_num tile_addr signed_num lo hi key skey ckey
+
+    if (( GB_SEG_CACHE )); then
+        # Any VRAM change since the cache was built empties it. The size limit
+        # keeps memory bounded if scrolling creates many distinct keys.
+        if (( SEG_CACHE_GEN != PPU_VRAM_GEN || ${#SEG_SHADE_CACHE[@]} > 4096 )); then
+            SEG_SHADE_CACHE=()
+            SEG_COL_CACHE=()
+            SEG_CACHE_GEN=$PPU_VRAM_GEN
+        fi
+        ckey="$map_base:$row_off:$first_col:$fine:$ntiles:$use_unsigned:$PPU_BGP"
+        if [[ -n ${SEG_SHADE_CACHE[$ckey]+x} ]]; then
+            _PPU_SEG_SHADE=${SEG_SHADE_CACHE[$ckey]}
+            _PPU_SEG_COL=${SEG_COL_CACHE[$ckey]}
+            return 0
+        fi
+    fi
+
     _PPU_SEG_SHADE=""
     _PPU_SEG_COL=""
     for (( tc = 0; tc < ntiles; tc++ )); do
@@ -150,6 +180,11 @@ ppu_fetch_segment() {
         _PPU_SEG_SHADE+=${PPU_SHADE_CACHE[$skey]}
         _PPU_SEG_COL+=${PPU_COL_CACHE[$key]}
     done
+
+    if (( GB_SEG_CACHE )); then
+        SEG_SHADE_CACHE[$ckey]=$_PPU_SEG_SHADE
+        SEG_COL_CACHE[$ckey]=$_PPU_SEG_COL
+    fi
 }
 
 # Render scanline PPU_LY into PPU_FRAMEBUFFER[PPU_LY].

@@ -39,6 +39,7 @@ make_side new "$ROOT/ashboy/ppu.sh" || fail "cannot copy the working tree"
 git -C "$ROOT" show "$REF:ashboy/ppu.sh" > "$TMP/ref_ppu.sh" 2>/dev/null \
     || fail "cannot read $REF:ashboy/ppu.sh"
 make_side ref "$TMP/ref_ppu.sh" || fail "cannot build the reference side"
+git -C "$ROOT" show "$REF:ashboy/mmu.sh" > "$TMP/ref/ashboy/mmu.sh" 2>/dev/null || fail "cannot read $REF:ashboy/mmu.sh"
 
 # run_side LABEL OUT_FILE ERR_FILE
 # Runs in the side's folder. Checks that every function the cases need is

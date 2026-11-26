@@ -152,7 +152,10 @@ mmu_write8() {
     fi
 
     if (( $1 < 40960 )); then
-        (( PPU_VRAM[$1 - 32768] = $2 & 0xFF ))
+        if (( ${PPU_VRAM[$1 - 32768]:-0} != ($2 & 0xFF) )); then
+            (( PPU_VRAM[$1 - 32768] = $2 & 0xFF ))
+            (( PPU_VRAM_GEN++ ))
+        fi
         return
     fi
 
