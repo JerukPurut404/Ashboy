@@ -159,7 +159,8 @@ ppu_render_scanline() {
     local y_bg tile_row_bg fine_y_bg fx tcol0 start wx0
     local bg_shade bg_col line idx row s0
     local sprite_height sprites_on_line i sy sx tile attr line_no t_addr lo hi
-    local pal bg_prio px out_x bit c_idx shade
+    local pal bg_prio px out_x bit c_idx
+    local x0 x1 k old seg
 
     # LCD off: the line is blank (shade 0) and nothing else is drawn
     if (( (lcdc & 0x80) == 0 )); then
@@ -194,8 +195,7 @@ ppu_render_scanline() {
         # Window line. Background tiles fill x < start, where start = max(0, WX-7).
         # Window tiles fill the rest. The window segment starts at tile column 0,
         # so the first window pixel is at offset wx0 = start - (WX-7) in it.
-        # Every window line advances the window line counter (the window is
-        # used on every line where win_enabled is set).
+        # Every window line advances the window line counter.
         ppu_fetch_segment "$bg_map" "$tile_row_bg" "$tcol0" "$fine_y_bg" 21 "$unsigned_tiles"
         bg_shade=$_PPU_SEG_SHADE
         bg_col=$_PPU_SEG_COL
@@ -216,38 +216,54 @@ ppu_render_scanline() {
         idx=${_PPU_SEG_COL:fx:160}
     fi
 
-    # Sprites, in OAM order. A later sprite overwrites an earlier one (as in the
-    # previous renderer). Sprite priority reads the background colour index.
+    # Sprites, in OAM order, at most 10 per line. A later sprite overwrites an
+    # earlier one. Colour 0 is transparent. With the priority attribute set, a
+    # sprite pixel is hidden unless the background colour index there is 0.
+    # idx holds the background colour indexes, and sprites never change it.
+    # Each sprite row is built as one 8-pixel string and spliced in once.
     if (( lcdc & 0x02 )); then
         sprite_height=$(( (lcdc & 0x04) ? 16 : 8 ))
         sprites_on_line=0
         for (( i = 0; i < 160; i += 4 )); do
             sy=$(( ${PPU_OAM[i]:-0} - 16 ))
+            if (( ly < sy || ly >= sy + sprite_height )); then
+                continue
+            fi
+            (( ++sprites_on_line > 10 )) && break
+
             sx=$(( ${PPU_OAM[i + 1]:-0} - 8 ))
             tile=${PPU_OAM[i + 2]:-0}
             attr=${PPU_OAM[i + 3]:-0}
-            if (( ly >= sy && ly < sy + sprite_height )); then
-                (( ++sprites_on_line > 10 )) && break
-                line_no=$(( ly - sy ))
-                (( attr & 0x40 )) && (( line_no = sprite_height - 1 - line_no ))
-                (( sprite_height == 16 )) && (( tile &= 0xFE ))
-                t_addr=$(( tile * 16 + line_no * 2 ))
-                lo=${PPU_VRAM[t_addr]:-0}
-                hi=${PPU_VRAM[t_addr + 1]:-0}
-                pal=$(( (attr & 0x10) ? PPU_OBP1 : PPU_OBP0 ))
-                bg_prio=$(( (attr & 0x80) ? 1 : 0 ))
-                for (( px = 0; px < 8; px++ )); do
-                    out_x=$(( sx + px ))
-                    (( out_x < 0 || out_x >= 160 )) && continue
-                    bit=$(( (attr & 0x20) ? px : (7 - px) ))
-                    c_idx=$(( ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1) ))
-                    (( c_idx == 0 )) && continue
-                    if (( !bg_prio || ${idx:out_x:1} == 0 )); then
-                        shade=$(( (pal >> (c_idx * 2)) & 3 ))
-                        line=${line:0:out_x}$shade${line:out_x+1}
-                    fi
-                done
+
+            line_no=$(( ly - sy ))
+            (( attr & 0x40 )) && (( line_no = sprite_height - 1 - line_no ))
+            (( sprite_height == 16 )) && (( tile &= 0xFE ))
+            t_addr=$(( tile * 16 + line_no * 2 ))
+            lo=${PPU_VRAM[t_addr]:-0}
+            hi=${PPU_VRAM[t_addr + 1]:-0}
+            pal=$(( (attr & 0x10) ? PPU_OBP1 : PPU_OBP0 ))
+            bg_prio=$(( (attr & 0x80) ? 1 : 0 ))
+
+            # Visible part of the sprite row, clipped to the screen
+            x0=$(( sx < 0 ? 0 : sx ))
+            x1=$(( sx + 8 > 160 ? 160 : sx + 8 ))
+            if (( x1 <= x0 )); then
+                continue
             fi
+            old=${line:x0:x1-x0}
+            seg=""
+            for (( out_x = x0; out_x < x1; out_x++ )); do
+                px=$(( out_x - sx ))
+                k=$(( out_x - x0 ))
+                bit=$(( (attr & 0x20) ? px : (7 - px) ))
+                c_idx=$(( (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1) ))
+                if (( c_idx == 0 || (bg_prio && ${idx:out_x:1} != 0) )); then
+                    seg+=${old:k:1}
+                else
+                    seg+=$(( (pal >> (c_idx * 2)) & 3 ))
+                fi
+            done
+            line=${line:0:x0}$seg${line:x1}
         done
     fi
 

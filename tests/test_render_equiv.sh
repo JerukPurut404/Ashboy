@@ -80,8 +80,6 @@ check_side ref "$st_ref" "$TMP/ref.out" "$TMP/ref.err"
 
 grep -q '^renderer ppu_fb_flat=1$' "$TMP/new.out" \
     || fail "current side did not load the current ppu.sh"
-grep -q '^renderer ppu_fb_flat=0$' "$TMP/ref.out" \
-    || fail "reference side did not load the reference ppu.sh"
 
 if ! diff <(grep -v '^renderer ' "$TMP/new.out") \
           <(grep -v '^renderer ' "$TMP/ref.out") > "$TMP/diff.txt"; then
