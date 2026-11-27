@@ -31,7 +31,7 @@ Pure Bash is slow. AshBoy runs well below real time. See [Performance](#performa
 
 ## Project progress
 
-Percentages are rough estimates. The two speed rows are measured.
+Percentages are rough estimates. The three speed rows are measured.
 
 ```
 CPU instructions (incl. CB prefix)  ███████████████████░  95%
@@ -93,7 +93,7 @@ bash main.sh [options] ROM_FILE
 | Option | Default | Meaning |
 |---|---|---|
 | `--scale N` | `1` | Picture scale for the terminal renderer. |
-| `--frameskip N` | `4` | Draw one frame in every N+1. The other frames are emulated but not drawn. |
+| `--frameskip N` | `0` | Draw one frame in every N+1. The other frames are emulated but not drawn. |
 | `--fps N` | `10` | Frame-rate cap. `0` means uncapped, and the emulator never sleeps. |
 | `--headless` | off | No drawing and no keyboard input. On exit, prints `frames=N steps=N` to stderr. Used for benchmarks. |
 | `--frames N` | `0` | Stop after N frames. `0` means run until Q. |
@@ -353,7 +353,7 @@ Local probe scripts (`probe*.sh`) are useful for timing and for counting instruc
 |---|---|---|
 | `NAME: command not found` | Function renamed or removed, or module not sourced | Run `tests/test_check.sh`. Check the name with `grep -n "NAME()" ashboy/*.sh`. |
 | `NAME: unbound variable` | Global used before it is declared, under `set -u` | Declare it with a default: `declare -gi NAME=0`. |
-| `syntax error in expression` with long text in the error token | Text was assigned to `REPLY`, which `init.sh` declares with `-i` | Store text in a named global such as `PPU_FLAT`. See [Coding rules](#coding-rules). |
+| `syntax error in expression` with long text in the error token | Text was assigned to an integer variable (declare -i). | Store text in a named global such as PPU_FLAT. See [Coding rules](#coding-rules). |
 | `value too great for base (error token is "066803")` | Locale uses a comma decimal separator, so `$EPOCHREALTIME` contains a comma | `now_us` must use `${EPOCHREALTIME//[^0-9]/}`. |
 | `sleep: invalid time interval` | Same comma issue, in `sleep` | Call `LC_NUMERIC=C sleep "$wait_s"`. |
 | `ppu_present_terminal: command not found` | Old function name | The name is `ppu_present_ansi`. Call it as `ppu_present_ansi "$SCALE"`. |
@@ -382,7 +382,7 @@ These rules come from bugs found during development. Follow them when changing t
 3. **`set -u` only, never `set -e`.** `(( 0 ))` returns status 1, which aborts the script.
 4. **Decimal case labels.** Write `65280)` in `case`, not `0xFF00)`. Hex labels never match.
 5. **Numbers go in `REPLY`, text goes in a named global.** Do not return values with `echo` or `$(...)`.
-6. **Never assign text to `REPLY`.** `init.sh` declares `REPLY` with `-i`, so text is evaluated as arithmetic and fails. Use a named global such as `PPU_FLAT`.
+6. **Keep text out of REPLY.** REPLY is for numbers. Store text in a named global such as PPU_FLAT, so the code does not depend on how REPLY is declared.
 7. **No forks in hot loops.** Avoid `$(...)`, pipes, `date`, `expr`, `seq`, `wc`, `grep`, and `awk` inside the emulation loop. Use builtins only.
 8. **Keep `local` out of per-pixel and per-instruction loops.** Declare variables once at the top of the function.
 9. **Read keys with `IFS= read -s -r -n 1 -t 0.001 key`.** Without `IFS=`, a typed space is stripped and becomes an empty string, which is the Enter key.
@@ -400,7 +400,6 @@ These rules come from bugs found during development. Follow them when changing t
 - **Speed.** About 5 FPS with the display on at default settings, and about 25 FPS headless in steady state, against the real console's 59.7 FPS. Pure Bash is unlikely to reach real time.
 - **Loop skip coverage.** The skip recognizes two loop shapes. Other loops run at full cost. Code in the switchable ROM bank (`0x4000–0x7FFF`) is never skipped.
 - **Sprite priority.** Sprites are drawn in OAM order. The hardware gives priority to the sprite with the lower X coordinate, and ties go to the earlier OAM entry. The fix changes output, so it needs its own commit and a new reference.
-- **`REPLY` attribute.** `init.sh` declares `REPLY` with `-i`. Removing the attribute changes global state, so it needs its own commit with the same verification.
 - **STAT interrupt.** The vector exists, but the conditions that raise it are not fully verified.
 - **Benchmarks exclude terminal paint time.** They write to `/dev/null`.
 - **Tested with few ROMs.** Behavior beyond the tested ROMs is unknown; other titles may expose bugs the emulator does not handle yet.
@@ -413,10 +412,9 @@ These rules come from bugs found during development. Follow them when changing t
 4. **Skip whole scanlines while a poll loop holds.** Exactness must be checked with `tests/test_skip_equivalence.sh` at 60 and 600 frames, skip on and off.
 5. **Fix sprite priority.** Implement the hardware rule as its own commit, with a new reference for `tests/test_render_equiv.sh`.
 6. **Check WRAM and HRAM first in the memory bus.** Move these high-frequency checks to the top of `mmu_read8` and `mmu_write8`. Confirm `steps=163821` and the framebuffer hashes stay unchanged, then measure the gain.
-7. **Remove the integer attribute from `REPLY`.** Its own commit, with the same verification.
-8. **Remove the `--sleep` stub** once nothing depends on it.
-9. **Decide the speed ceiling.** Staying in pure Bash is the current choice. A compiled hot loop would break the pure-Bash requirement, so that decision belongs to the project owner.
-10. **Sound.** Not planned. It depends on real-time timing, which depends on item 9.
+7. **Remove the `--sleep` stub** once nothing depends on it.
+8. **Decide the speed ceiling.** Staying in pure Bash is the current choice. A compiled hot loop would break the pure-Bash requirement, so that decision belongs to the project owner.
+9. **Sound.** Not planned. It depends on real-time timing, which depends on item 8.
 
 ## Credits
 
