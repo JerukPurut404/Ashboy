@@ -321,60 +321,6 @@ ppu_fb_flat() {
     PPU_FLAT="${flat[*]}"
 }
 
-ppu_tick() {
-    local cycles=$1
-    if (( (PPU_LCDC & 0x80) == 0 )); then
-        PPU_DOTS=0; PPU_LY=0; PPU_WIN_LINE=0
-        (( PPU_STAT &= 0xFC ))
-        return
-    fi
-    (( PPU_DOTS += cycles ))
-    case $PPU_MODE in
-        2) # Mode 2: OAM Scan
-            if (( PPU_DOTS >= 80 )); then
-                (( PPU_DOTS -= 80 ))
-                ppu_set_mode 3
-            fi
-            ;;
-        3) # Mode 3: Pixel Drawing
-            if (( PPU_DOTS >= 172 )); then
-                (( PPU_DOTS -= 172 ))
-                if (( GB_SKIP_RENDER == 0 )); then
-                    ppu_render_scanline
-                fi
-                ppu_set_mode 0
-            fi
-            ;;
-        0) # Mode 0: H-Blank
-            if (( PPU_DOTS >= 204 )); then
-                (( PPU_DOTS -= 204 ))
-                (( PPU_LY++ ))
-                ppu_check_lyc
-                if (( PPU_LY == 144 )); then
-                    ppu_set_mode 1
-                    PPU_FRAME_READY=1
-                    (( MMU_IF |= INT_VBLANK ))
-                else
-                    ppu_set_mode 2
-                fi
-            fi
-            ;;
-        1) # Mode 1: V-Blank
-            if (( PPU_DOTS >= 456 )); then
-                (( PPU_DOTS -= 456 ))
-                (( PPU_LY++ ))
-                if (( PPU_LY > 153 )); then
-                    PPU_LY=0
-                    PPU_WIN_LINE=0
-                    ppu_check_lyc
-                    ppu_set_mode 2
-                else
-                    ppu_check_lyc
-                fi
-            fi
-            ;;
-    esac
-}
 
 # Build the whole frame in one string and write it with one printf.
 ppu_present_ansi() {

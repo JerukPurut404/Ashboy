@@ -134,22 +134,21 @@ test_serial_hello_rom() {
     assert_eq "OK" "$SERIAL_OUTPUT" "Serial port captures 'OK' transfer"
 }
 
+
 test_ppu_vblank() {
     printf 'Running test_ppu_vblank...\n'
     setup_blank_rom
-    GB_SKIP_RENDER=0
+    RENDER_THIS_FRAME=1
     MMU_IF=0
-
-    # Advance PPU through 144 scanlines (144 * 456 = 65,664 dots)
+    # Run the 144 visible scanlines through the emulator's own scanline path.
     local line
     for (( line = 0; line < 144; line++ )); do
-        ppu_tick 80  # Mode 2 -> Mode 3
-        ppu_tick 172 # Mode 3 -> Mode 0 (renders scanline)
-        ppu_tick 204 # Mode 0 -> Next line (or Mode 1 at LY=144)
+        gameboy_step_scanline
     done
-
     assert_eq 144 "$PPU_LY" "PPU reaches LY=144 after 144 scanlines"
-    assert_eq 1 "$PPU_FRAME_READY" "PPU marks frame ready at V-Blank"
+    assert_eq 0 $(( MMU_IF & INT_VBLANK )) "V-Blank is not requested before LY=144"
+    # The next scanline is the first V-Blank line, which requests the interrupt.
+    gameboy_step_scanline
     assert_eq "$INT_VBLANK" $(( MMU_IF & INT_VBLANK )) "PPU fires V-Blank interrupt at LY=144"
 }
 
