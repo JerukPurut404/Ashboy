@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/ashboy/gameboy.sh"
 
 SCALE=1
-FRAMESKIP=4      # draw 1 frame out of every FRAMESKIP+1
+FRAMESKIP=0      # draw 1 frame out of every FRAMESKIP+1
 FPS=10           # target frame rate; 0 = uncapped (never sleep)
 HEADLESS=0
 MAX_FRAMES=0     # 0 = run until Q
@@ -17,7 +17,7 @@ usage() {
     cat <<'EOF'
 Usage: bash main.sh [options] <rom.gb>
   --scale <1|2>      Render scale (default: 1)
-  --frameskip <N>    Draw only every (N+1)th frame (default: 4)
+  --frameskip <N>    Draw only every (N+1)th frame (default: 0)
   --fps <N>          Frame-rate cap, 0 = uncapped (default: 10)
   --headless         No drawing and no key input (benchmarking)
   --frames <N>       Stop after N frames (default: unlimited)
