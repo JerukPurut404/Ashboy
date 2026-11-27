@@ -20,6 +20,15 @@ source "$_PPU_DIR/init.sh"
 declare -gi PPU_VRAM_GEN=${PPU_VRAM_GEN:-0}
 declare -gi SEG_CACHE_GEN=-1
 declare -gi GB_SEG_CACHE=${GB_SEG_CACHE:-1}
+# GB_SPRITE_ORDER=oam draws sprites in OAM order, the old behaviour. The default
+# (any other value, or unset) uses the hardware rule: smaller X on top, and on
+# equal X the earlier OAM entry on top.
+declare -gi GB_SPRITE_HW=1
+if [[ ${GB_SPRITE_ORDER:-hw} == oam ]]; then
+    GB_SPRITE_HW=0
+fi
+# Scratch list of selected sprites, sorted in draw order. Rebuilt for each line.
+declare -ga _PPU_SPR_ORD=()
 declare -gA SEG_SHADE_CACHE=() SEG_COL_CACHE=()
 
 declare -ga PPU_VRAM=()
@@ -193,6 +202,7 @@ ppu_render_scanline() {
     local y_bg tile_row_bg fine_y_bg fx tcol0 start wx0
     local bg_shade bg_col line idx row s0
     local sprite_height sprites_on_line i sy sx tile attr line_no t_addr lo hi
+    local sort_key v j n_ord q step
     local pal bg_prio px out_x bit c_idx
     local x0 x1 k old seg
 
@@ -250,25 +260,54 @@ ppu_render_scanline() {
         idx=${_PPU_SEG_COL:fx:160}
     fi
 
-    # Sprites, in OAM order, at most 10 per line. A later sprite overwrites an
-    # earlier one. Colour 0 is transparent. With the priority attribute set, a
-    # sprite pixel is hidden unless the background colour index there is 0.
+    # Sprites: at most 10 per line, selected in OAM order as the hardware does.
+    # Colour 0 is transparent. With the priority attribute set, a sprite pixel
+    # is hidden unless the background colour index there is 0.
     # idx holds the background colour indexes, and sprites never change it.
     # Each sprite row is built as one 8-pixel string and spliced in once.
+    # Where two sprites overlap, the one drawn last is on top. The default
+    # (GB_SPRITE_HW=1) is the hardware rule: smaller X is on top, and on equal
+    # X the earlier OAM entry is on top. GB_SPRITE_ORDER=oam draws in OAM order.
     if (( lcdc & 0x02 )); then
         sprite_height=$(( (lcdc & 0x04) ? 16 : 8 ))
         sprites_on_line=0
+        _PPU_SPR_ORD=()
         for (( i = 0; i < 160; i += 4 )); do
             sy=$(( ${PPU_OAM[i]:-0} - 16 ))
             if (( ly < sy || ly >= sy + sprite_height )); then
                 continue
             fi
             (( ++sprites_on_line > 10 )) && break
-
+            # Sort key: X then OAM entry (hardware), or OAM entry only (oam).
+            # The low 8 bits of v hold the OAM byte offset i.
+            if (( GB_SPRITE_HW )); then
+                sort_key=$(( ${PPU_OAM[i + 1]:-0} * 64 + i / 4 ))
+            else
+                sort_key=0
+            fi
+            v=$(( (sort_key << 8) | i ))
+            # Insertion sort, ascending by v. At most 10 entries.
+            (( j = ${#_PPU_SPR_ORD[@]} ))
+            while (( j > 0 && _PPU_SPR_ORD[j - 1] > v )); do
+                _PPU_SPR_ORD[j]=${_PPU_SPR_ORD[j - 1]}
+                (( j-- ))
+            done
+            _PPU_SPR_ORD[j]=$v
+        done
+        n_ord=${#_PPU_SPR_ORD[@]}
+        # Hardware: the sorted list runs from top priority down, so draw it
+        # from the end. OAM mode: sorted by OAM entry, so draw from the start.
+        if (( GB_SPRITE_HW )); then
+            q=$(( n_ord - 1 )); step=-1
+        else
+            q=0; step=1
+        fi
+        for (( ; q >= 0 && q < n_ord; q += step )); do
+            i=$(( _PPU_SPR_ORD[q] & 0xFF ))
+            sy=$(( ${PPU_OAM[i]:-0} - 16 ))
             sx=$(( ${PPU_OAM[i + 1]:-0} - 8 ))
             tile=${PPU_OAM[i + 2]:-0}
             attr=${PPU_OAM[i + 3]:-0}
-
             line_no=$(( ly - sy ))
             (( attr & 0x40 )) && (( line_no = sprite_height - 1 - line_no ))
             (( sprite_height == 16 )) && (( tile &= 0xFE ))
@@ -277,7 +316,6 @@ ppu_render_scanline() {
             hi=${PPU_VRAM[t_addr + 1]:-0}
             pal=$(( (attr & 0x10) ? PPU_OBP1 : PPU_OBP0 ))
             bg_prio=$(( (attr & 0x80) ? 1 : 0 ))
-
             # Visible part of the sprite row, clipped to the screen
             x0=$(( sx < 0 ? 0 : sx ))
             x1=$(( sx + 8 > 160 ? 160 : sx + 8 ))
@@ -300,7 +338,6 @@ ppu_render_scanline() {
             line=${line:0:x0}$seg${line:x1}
         done
     fi
-
     PPU_FRAMEBUFFER[ly]=$line
     return 0
 }
