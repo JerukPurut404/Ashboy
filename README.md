@@ -44,6 +44,7 @@ Serial port                         ██████████████�
 Sound (APU)                         ░░░░░░░░░░░░░░░░░░░░   0%
 Speed, headless (25 of 60 FPS)      ████████░░░░░░░░░░░░  42%
 Speed, playable (5 of 60 FPS)       ██░░░░░░░░░░░░░░░░░░   8%
+Speed, storm scene (2 of 60 FPS)    █░░░░░░░░░░░░░░░░░░░   3%
 ```
 
 ---
@@ -169,6 +170,10 @@ main.sh
 **Framebuffer.** `PPU_FRAMEBUFFER` holds 144 rows. Each row is one 160-character string of shade digits (0 to 3). Background and window lines are built from 8-pixel tile rows cached by their two bytes and palette. Sprites are written into the line string. `ppu_fb_flat` produces the flat text used for hashing; it stores the result in `PPU_FLAT`.
 
 **Output.** `ppu_present_ansi` combines pairs of framebuffer rows into half-block characters and prints the whole frame with one `printf` call. The frame is redrawn in place with `ESC[H`, so the terminal is never cleared.
+
+**Segment cache.** Background and window segments are converted to shade and colour strings once and reused. `ppu_fetch_segment` stores each result under a key made of its arguments and `PPU_BGP`. `PPU_VRAM_GEN` is a generation counter. It moves only when a VRAM byte really changes, in the VRAM branch of `mmu_write8`, and the cache is emptied whenever it moves. The cache is also emptied if it grows past 4096 entries. Set `GB_SEG_CACHE=0` to turn it off. The output is identical either way, and the equivalence tests check that.
+
+Measured on a ROM with a static background: 40 drawn frames at `--frameskip 0` took 13.6 s on average with the cache off and 11.4 s with it on (three runs each). On a second ROM with frequent VRAM writes, 94.5% of segment lookups over 900 frames were reusable, but that ROM has not been timed yet, so its saving is unknown.
 
 **CPU dispatch.** A 256-entry table, `OP_FN`, maps each opcode to a handler function. Opcodes with the `CB` prefix go through `op_cb`. Ranges such as `0x40-0x7F` (LD r,r) and `0x80-0xBF` (ALU) are filled in bulk, and individual opcodes are mapped last.
 

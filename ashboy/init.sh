@@ -25,7 +25,7 @@ readonly CYCLES_PER_SCANLINE=456
 readonly SCANLINES_PER_FRAME=154
 readonly CYCLES_PER_FRAME=70224
 
-declare -gi REPLY=0
+declare -g REPLY=0
 
 # Precomputed Flag Lookup Tables 
 # Pre-calculating 8-bit INC and DEC flag transitions saves millions of runtime comparisons
