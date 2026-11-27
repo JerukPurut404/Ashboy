@@ -40,7 +40,6 @@ declare -gi PPU_WX=0x00
 declare -gi PPU_DOTS=0
 declare -gi PPU_MODE=2
 declare -gi PPU_WIN_LINE=0
-declare -gi PPU_FRAME_READY=0
 
 # Shade for each colour index (0-3), set once per line from BGP.
 declare -ga _PPU_SHADE=(0 0 0 0)
@@ -90,7 +89,7 @@ ppu_init() {
     PPU_BGP=0xFC;  PPU_OBP0=0xFF; PPU_OBP1=0xFF
     PPU_WY=0;      PPU_WX=0
     PPU_DOTS=0;    PPU_MODE=2
-    PPU_WIN_LINE=0; PPU_FRAME_READY=0
+    PPU_WIN_LINE=0
 }
 
 ppu_check_lyc() {
